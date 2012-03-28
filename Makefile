@@ -1,13 +1,13 @@
-all: generate run
+all: generate pqs
 
 generate: generate.c
 	gcc -o generate generate.c
 
-pqsort.o: pqsort.c
-	gcc -c -lm -lpthread pqsort.c
+prefix.o: prefix.c
+	gcc -std=gnu99 -g -c -lm -lpthread prefix.c
 
-run: driver.c pqsort.o
-	gcc -o run driver.c pqsort.o -lm -lpthread
+pqs: driver.c prefix.o
+	gcc -std=gnu99 -g -o pqs driver.c prefix.o -lm -lpthread
 
 clean:
-	rm generate pqsort.o run
+	rm generate prefix.o pqs

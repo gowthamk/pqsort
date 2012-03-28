@@ -43,6 +43,11 @@ int main(int argc, char **argv)
       {printf("Invalid input\n"); exit(0);}
 
     output = pqsort(input, num_elements, num_threads);
+    printf("\nOutput: ");
+    for(i=0;i<num_elements;i++){
+        printf("%d ",output[i]);
+    }
+    printf("\n");
 
     validate(output, num_elements);
     return 0;
