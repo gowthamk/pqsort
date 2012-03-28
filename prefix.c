@@ -7,6 +7,7 @@
 #define XOR ^
 int *mail_box;
 int num_threads;
+int pivot_replacement_index;
 pthread_mutex_t *lock_array;
 pthread_cond_t *cond_array;
 pthread_t *threads;
@@ -52,8 +53,9 @@ int *pqsort(int *inp,int size,int _num_threads)
 }
 void _pqsort(int *inp,int first, int last)
 {
-    if(last<=first)
+    if(last<=first){
         return;
+    }
     int *arr = inp+first; /*(int *)malloc(size * sizeof(int));
     memcpy(arr,inp,size*sizeof(int));
     printf("\n");*/
@@ -102,17 +104,21 @@ void _pqsort(int *inp,int first, int last)
                        (void *)&thread_args[i]);
     }
     /* Wait for N threads to join */
-    int last_low_index;
+    int pivot_index;
     for(int i=0;i<num_threads;i++){
-        pthread_join(tids[i],(void *) &last_low_index);
+        pthread_join(tids[i],(void *) &pivot_index);
     }
-    printf("Last low index is %d\n",(int) last_low_index);
+    if(arr[pivot_index]!=pivot){
+        arr[pivot_replacement_index] = arr[pivot_index];
+        arr[pivot_index] = pivot;
+    }
+    printf("Pivot index is %d\n",(int) pivot_index);
     free(mail_box);
     free(lock_array);
     free(cond_array);
     free(thread_args);
-    _pqsort(arr,first,(int) last_low_index);
-    _pqsort(arr,(int) last_low_index+1+first,last);
+    _pqsort(arr,0,(int) pivot_index-1);
+    _pqsort(arr,(int) pivot_index+1,size-1);
     return;
 
 }
@@ -174,10 +180,14 @@ void *pthread_pqsort(void *tdata)
     }
     add_to_all(bin,incr,size);
     /* END PREFIX SUM on bin*/
-    int cur_index,new_index;
+    int cur_index,new_index,returnable = 0;
     for(int i=0;i<size;i++){
-        if(aux[i] <= pivot){
+        if(aux[i] <  pivot){
             new_index = bin[i]-1;
+        }
+        else if(aux[i] == pivot){
+            new_index = msg-1;
+            pivot_replacement_index = bin[i]-1;
         }
         else {
             cur_index = offset+i;
