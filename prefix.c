@@ -6,19 +6,27 @@
 #define NUM_THREADS 4
 #define XOR ^
 int *mail_box;
-int num_threads;
-int pivot_replacement_index;
+int total_num_threads;
 pthread_mutex_t *lock_array;
 pthread_cond_t *cond_array;
 pthread_t *threads;
 typedef struct {
     int thread_no;
+    int num_threads;
     int *inp;
     int offset;
     int size;
     int pivot;
+    int *pivot_replacement_ptr;
 } prefix_args_t;
-void _pqsort(int *,int,int);
+typedef struct {
+    int  *inp;
+    int first;
+    int last;
+    int num_threads;
+    int thread_offset;
+} pqsort_args_t;
+void *_pqsort(void *);
 void *pthread_pqsort(void *);
 void seq_prefix_sum(int *,int);
 void add_to_all(int *arr, int incr, int size);
@@ -27,7 +35,7 @@ void add_to_all(int *arr, int incr, int size);
 */
 int array_index(int row,int col)
 {
-    return row*num_threads+col;
+    return row*total_num_threads+col;
 }
 int compare (const void * a, const void * b)
 {
@@ -45,16 +53,45 @@ int get_pivot(int *arr,int size)
     qsort(samples,num_samples,sizeof(int),compare);
     return samples[num_samples/2];
 }
-int *pqsort(int *inp,int size,int _num_threads)
+int *pqsort(int *inp,int size,int num_threads)
 {
-    num_threads = _num_threads;
-    _pqsort(inp,0,size-1);
+    total_num_threads = num_threads;
+    /* Initialize all shared datastructures that
+       stay alive througout the execution
+     */
+    mail_box = (int *) malloc(num_threads*num_threads*sizeof(int));
+    lock_array = (pthread_mutex_t *) malloc(num_threads*num_threads*sizeof(pthread_mutex_t));
+    cond_array = (pthread_cond_t *) malloc(num_threads*num_threads*sizeof(pthread_cond_t));
+    for(int i=0;i<num_threads;i++){
+        for(int j=0;j<num_threads;j++){
+            /* Initializing shared memory for msg exchange */
+            mail_box[array_index(i,j)] = -1;
+            /* Initializing locks for shared memory */
+            pthread_mutex_init(&lock_array[array_index(i,j)],NULL);
+            /* Initializing conditions for threads to act on */
+            pthread_cond_init(&cond_array[array_index(i,j)],NULL);
+        }
+    }
+    /* Launch first instance of quicksort */
+    pqsort_args_t args;
+    args.inp = inp;
+    args.first = 0;
+    args.last = size-1;
+    args.num_threads = num_threads;
+    args.thread_offset = 0;
+    _pqsort((void *)&args);
     return inp;
 }
-void _pqsort(int *inp,int first, int last)
+void *_pqsort(void *pqdata)
 {
+    pqsort_args_t *my_args = (pqsort_args_t *)pqdata;
+    int *inp = my_args->inp;
+    int first = my_args->first;
+    int last = my_args->last;
+    int num_threads = my_args->num_threads;
+    int thread_offset = my_args->thread_offset;
     if(last<=first){
-        return;
+        return NULL;
     }
     int *arr = inp+first; /*(int *)malloc(size * sizeof(int));
     memcpy(arr,inp,size*sizeof(int));
@@ -66,41 +103,31 @@ void _pqsort(int *inp,int first, int last)
         printf("%d ",arr[i]);
     }
     printf("]\n");*/
-    /* Firstly, if size<num_threads, we are here for a sequential sort*/
-    if(size <= num_threads){
+    /* Firstly, if num_threads == 1, we are here for a sequential sort*/
+    if(num_threads == 1 || size<num_threads){
         qsort(arr,size,sizeof(int),compare);
-        return;
+        return NULL;
     }
     int pivot = get_pivot(arr,size);
+    int pivot_replacement_index;
     //printf("Pivot is %d\n",pivot);
-    pthread_t tids[num_threads*num_threads];
+    pthread_t tids[num_threads];
     pthread_attr_t attr;
-    /* Initializing pthread attribs */
     pthread_attr_init(&attr);
-    /* Making threads joinable */
     pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_JOINABLE);
 
-    mail_box = (int *) malloc(num_threads*num_threads*sizeof(int));
-    lock_array = (pthread_mutex_t *) malloc(num_threads*num_threads*sizeof(pthread_mutex_t));
-    cond_array = (pthread_cond_t *) malloc(num_threads*num_threads*sizeof(pthread_cond_t));
-    prefix_args_t *thread_args = (prefix_args_t *) malloc(num_threads * sizeof(prefix_args_t));
     int fair_share = size/num_threads;
     int max_share = fair_share+(size%num_threads);
+    prefix_args_t *thread_args = (prefix_args_t *) malloc(num_threads * sizeof(prefix_args_t));
     for(int i=0;i<num_threads;i++){
         /* Initialize Arguments for N threads */
-        thread_args[i].thread_no = i;
+        thread_args[i].thread_no = i + thread_offset;
+        thread_args[i].num_threads = num_threads;
         thread_args[i].inp = arr;
         thread_args[i].offset = i*fair_share;
         thread_args[i].size = (i==num_threads-1)?max_share:fair_share;
         thread_args[i].pivot = pivot;
-        for(int j=0;j<num_threads;j++){
-            /* Initializing shared memory for msg exchange */
-            mail_box[array_index(i,j)] = -1;
-            /* Initializing locks for shared memory */
-            pthread_mutex_init(&lock_array[array_index(i,j)],NULL);
-            /* Initializing conditions for threads to act on */
-            pthread_cond_init(&cond_array[array_index(i,j)],NULL);
-        }
+        thread_args[i].pivot_replacement_ptr = &pivot_replacement_index;
     }
     /* Launch N threads */
     for(int i=0;i<num_threads;i++){
@@ -119,24 +146,43 @@ void _pqsort(int *inp,int first, int last)
         arr[pivot_index] = pivot;
     }
     //printf("Pivot index is %d\n",(int) pivot_index);
-    free(mail_box);
-    free(lock_array);
-    free(cond_array);
-    free(thread_args);
-    _pqsort(arr,0,(int) pivot_index-1);
-    _pqsort(arr,(int) pivot_index+1,size-1);
-    return;
-
+    /* Launch 2 new threads to deal with 2 recursive calls */
+    pqsort_args_t args[2];
+    args[0].inp = arr;
+    args[0].first = 0;
+    args[0].last = pivot_index-1;
+    args[0].num_threads = num_threads/2;
+    args[0].thread_offset = thread_offset;
+    pthread_create(&tids[0],
+                   &attr,
+                   _pqsort,
+                   (void *)&args[0]);
+    args[1].inp = arr;
+    args[1].first = pivot_index+1;
+    args[1].last = size-1;
+    args[1].num_threads = num_threads - (num_threads/2);
+    args[1].thread_offset = thread_offset+(num_threads/2);
+    pthread_create(&tids[1],
+                   &attr,
+                   _pqsort,
+                   (void *)&args[1]);
+    for(int i=0;i<2;i++){
+        pthread_join(tids[i],NULL);
+    }
+    return NULL;
 }
 void *pthread_pqsort(void *tdata)
 {
     prefix_args_t *myargs = (prefix_args_t *) tdata;
     int my_id = myargs->thread_no;
+    //printf("My Id is %d\n",my_id);
+    int num_threads = myargs->num_threads;
     int *inp = myargs->inp;
     int offset = myargs->offset;
     int *arr = inp + offset;
     int size = myargs->size;
     int pivot = myargs->pivot;
+    int *pivot_replacement_ptr = myargs->pivot_replacement_ptr;
     int aux[size],bin[size];
     memcpy(aux,arr,size*sizeof(int));
     for(int i=0;i<size;i++){
@@ -152,7 +198,7 @@ void *pthread_pqsort(void *tdata)
     int d = ceil(log(num_threads)/log(2));
     //printf("num_threads is %d and d is %d\n",num_threads,d);
     /* Get address of my inbox */
-    int *my_mail = mail_box+(num_threads*my_id);
+    int *my_mail = mail_box+(total_num_threads*my_id);
     /* Calculate sequential prefix_sum */
     seq_prefix_sum(bin,size);
     /* Last element in prefix_sum is sum of all elements */
@@ -178,6 +224,7 @@ void *pthread_pqsort(void *tdata)
         }
         number = my_mail[partner];
         pthread_mutex_unlock(&lock_array[array_index(my_id,partner)]);
+        //printf("Thread(%d): Recieved %d from %d\n",my_id,number,partner);
         msg+=number;
         /* If partner deals with lesser indexes in array, add its
            results to your elements
@@ -186,6 +233,10 @@ void *pthread_pqsort(void *tdata)
             incr+=number;
     }
     add_to_all(bin,incr,size);
+    /* Reset mailbox for reuse at next level */
+    for(int i=0;i<total_num_threads;i++){
+        my_mail[i] = -1;
+    }
     /* END PREFIX SUM on bin*/
     int cur_index,new_index,returnable = 0;
     for(int i=0;i<size;i++){
@@ -194,7 +245,7 @@ void *pthread_pqsort(void *tdata)
         }
         else if(aux[i] == pivot){
             new_index = bin[i]-1;
-            pivot_replacement_index = bin[i]-1;
+            *pivot_replacement_ptr = bin[i]-1;
         }
         else {
             cur_index = offset+i;
