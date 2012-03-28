@@ -46,7 +46,7 @@ int get_pivot(int *arr,int size)
     if(size<10)
         return arr[size/2];
     int num_samples;
-    num_samples = (size>=1000)?21:(size>=100?11:3);
+    num_samples = (size>=1000)?111:(size>=100?11:3);
     int offset = (size/2)>num_samples?(size/2):0;
     int samples[num_samples];
     memcpy(samples,arr+offset,num_samples*sizeof(int));
@@ -183,7 +183,9 @@ void *pthread_pqsort(void *tdata)
     int size = myargs->size;
     int pivot = myargs->pivot;
     int *pivot_replacement_ptr = myargs->pivot_replacement_ptr;
-    int aux[size],bin[size];
+    //int aux[size],bin[size];
+    int *aux = (int *)malloc(size*sizeof(int));
+    int *bin = (int *)malloc(size*sizeof(int));
     memcpy(aux,arr,size*sizeof(int));
     for(int i=0;i<size;i++){
         if(aux[i] <= pivot){
