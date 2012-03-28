@@ -9,7 +9,7 @@ void validate(int* output, int num_elements) {
   assert(output != NULL);
   for(i = 0; i < num_elements - 1; i++) {
     if (output[i] > output[i+1]) {
-      printf("************* NOT sorted *************\n");
+      printf("************* NOT sorted at i=%d *************\n",i);
       return;
     }
   }
@@ -43,11 +43,11 @@ int main(int argc, char **argv)
       {printf("Invalid input\n"); exit(0);}
 
     output = pqsort(input, num_elements, num_threads);
-    printf("\nOutput: ");
+    /*printf("\nOutput: ");
     for(i=0;i<num_elements;i++){
         printf("%d ",output[i]);
     }
-    printf("\n");
+    printf("\n");*/
 
     validate(output, num_elements);
     return 0;

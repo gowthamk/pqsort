@@ -60,13 +60,19 @@ void _pqsort(int *inp,int first, int last)
     memcpy(arr,inp,size*sizeof(int));
     printf("\n");*/
     int size = last-first+1;
+    /*printf("[");
+    for(int i=0;i<size;i++)
+    {
+        printf("%d ",arr[i]);
+    }
+    printf("]\n");*/
     /* Firstly, if size<num_threads, we are here for a sequential sort*/
     if(size <= num_threads){
         qsort(arr,size,sizeof(int),compare);
         return;
     }
     int pivot = get_pivot(arr,size);
-    printf("Pivot is %d\n",pivot);
+    //printf("Pivot is %d\n",pivot);
     pthread_t tids[num_threads*num_threads];
     pthread_attr_t attr;
     /* Initializing pthread attribs */
@@ -112,7 +118,7 @@ void _pqsort(int *inp,int first, int last)
         arr[pivot_replacement_index] = arr[pivot_index];
         arr[pivot_index] = pivot;
     }
-    printf("Pivot index is %d\n",(int) pivot_index);
+    //printf("Pivot index is %d\n",(int) pivot_index);
     free(mail_box);
     free(lock_array);
     free(cond_array);
@@ -143,7 +149,8 @@ void *pthread_pqsort(void *tdata)
     /* START PREFIX SUM on bin*/
     //printf("Thread no %d : size is %d\n",my_id,size);
     /* d holds the dimensions of imaginary hypercube */
-    int d = ceil(log(num_threads));
+    int d = ceil(log(num_threads)/log(2));
+    //printf("num_threads is %d and d is %d\n",num_threads,d);
     /* Get address of my inbox */
     int *my_mail = mail_box+(num_threads*my_id);
     /* Calculate sequential prefix_sum */
@@ -186,7 +193,7 @@ void *pthread_pqsort(void *tdata)
             new_index = bin[i]-1;
         }
         else if(aux[i] == pivot){
-            new_index = msg-1;
+            new_index = bin[i]-1;
             pivot_replacement_index = bin[i]-1;
         }
         else {
