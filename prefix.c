@@ -3,11 +3,15 @@
 #include<string.h>
 #include<math.h>
 #include<pthread.h>
+#include<assert.h>
 #define NUM_THREADS 4
 #define XOR ^
 #define array_index(row,col) (row*total_num_threads+col)
-int *mail_box;
+int *mail_box1;
+int *mail_box2;
+int *input;
 int total_num_threads;
+int total_num_elements;
 pthread_mutex_t *lock_array;
 pthread_cond_t *cond_array;
 pthread_t *threads;
@@ -16,7 +20,6 @@ typedef struct {
     int num_threads;
     int *inp;
     int *aux;
-    int *bin;
     int offset;
     int size;
     int pivot;
@@ -27,15 +30,15 @@ typedef struct {
     int first;
     int last;
     int *aux;
-    int *bin;
     int num_threads;
     int thread_offset;
 } pqsort_args_t;
 void *_pqsort(void *);
 void *pthread_pqsort(void *);
-void seq_prefix_sum(int *,int);
-void add_to_all(int *arr, int incr, int size);
-int compare (const void * a, const void * b)
+void  seq_prefix_sum(int *,int);
+int   seq_pivot_rearrange(int *,int,int);
+void  add_to_all(int *arr, int incr, int size);
+int   compare (const void * a, const void * b)
 {
   return ( *(int*)a - *(int*)b );
 }
@@ -54,19 +57,22 @@ int get_pivot(int *arr,int size)
 int *pqsort(int *inp,int size,int num_threads)
 {
     total_num_threads = num_threads;
+    total_num_elements = size;
+    input = inp;
     /* Initialize all shared datastructures that
        stay alive througout the execution
      */
-    mail_box = (int *) malloc(num_threads*num_threads*sizeof(int));
+    mail_box1 = (int *) malloc(num_threads*num_threads*sizeof(int));
+    mail_box2 = (int *) malloc(num_threads*num_threads*sizeof(int));
     lock_array = (pthread_mutex_t *) malloc(num_threads*num_threads*sizeof(pthread_mutex_t));
     cond_array = (pthread_cond_t *) malloc(num_threads*num_threads*sizeof(pthread_cond_t));
-    /* auxilary and binary array for pivot rearrangement and prefix sum */
+    /* auxilary array for pivot rearrangement and prefix sum */
     int *aux = (int *) malloc(size*sizeof(int));
-    int *bin = (int *) malloc(size*sizeof(int));
     for(int i=0;i<num_threads;i++){
         for(int j=0;j<num_threads;j++){
             /* Initializing shared memory for msg exchange */
-            mail_box[array_index(i,j)] = -1;
+            mail_box1[array_index(i,j)] = -1;
+            mail_box2[array_index(i,j)] = -1;
             /* Initializing locks for shared memory */
             pthread_mutex_init(&lock_array[array_index(i,j)],NULL);
             /* Initializing conditions for threads to act on */
@@ -79,11 +85,13 @@ int *pqsort(int *inp,int size,int num_threads)
     args.first = 0;
     args.last = size-1;
     args.aux = aux;
-    args.bin = bin;
     args.num_threads = num_threads;
     args.thread_offset = 0;
     _pqsort((void *)&args);
-    return inp;
+    if((int) ceil(log(num_threads)/log(2))%2 == 0)
+        return inp;
+    else
+        return aux;
 }
 void *_pqsort(void *pqdata)
 {
@@ -92,30 +100,25 @@ void *_pqsort(void *pqdata)
     int first = my_args->first;
     int last = my_args->last;
     int *aux = my_args->aux;
-    int *bin = my_args->bin;
     int num_threads = my_args->num_threads;
     int thread_offset = my_args->thread_offset;
-    if(last<=first){
+    if(last<first){
         return NULL;
     }
     int *arr = inp+first; 
     int size = last-first+1;
     aux+=first;
-    bin+=first;
-    /*printf("[");
-    for(int i=0;i<size;i++)
-    {
-        printf("%d ",arr[i]);
-    }
-    printf("]\n");*/
+    /* In every recursive call, aux is a shadow for arr */
     /* Firstly, if num_threads == 1, we are here for a sequential sort*/
     if(num_threads == 1 || size<num_threads){
         qsort(arr,size,sizeof(int),compare);
+        if(num_threads!=1 && ((int) ceil(log(total_num_threads/num_threads)/log(2))%2 == 0))
+            memcpy(aux,arr,size*sizeof(int));
         return NULL;
     }
     int pivot = get_pivot(arr,size);
     int pivot_replacement_index;
-    //printf("Pivot is %d\n",pivot);
+   // printf("Pivot is %d\n",pivot);
     pthread_t tids[num_threads];
     pthread_attr_t attr;
     pthread_attr_init(&attr);
@@ -130,7 +133,6 @@ void *_pqsort(void *pqdata)
         thread_args[i].num_threads = num_threads;
         thread_args[i].inp = arr;
         thread_args[i].aux = aux;
-        thread_args[i].bin = bin;
         thread_args[i].offset = i*fair_share;
         thread_args[i].size = (i==num_threads-1)?max_share:fair_share;
         thread_args[i].pivot = pivot;
@@ -148,29 +150,37 @@ void *_pqsort(void *pqdata)
     for(int i=0;i<num_threads;i++){
         pthread_join(tids[i],(void *) &pivot_index);
     }
-    if(arr[pivot_index]!=pivot){
-        arr[pivot_replacement_index] = arr[pivot_index];
-        arr[pivot_index] = pivot;
+    /* Global positioning of pivot */
+    /* aux is the new arr */
+    if(aux[pivot_index]!=pivot){
+        assert(pivot_replacement_index>=0);
+        aux[pivot_replacement_index] = aux[pivot_index];
+        aux[pivot_index] = pivot;
     }
-    //printf("Pivot index is %d\n",(int) pivot_index);
-    /* Launch 2 new threads to deal with 2 recursive calls */
+    /* arr is the aux of next level */
+    arr[pivot_index] = pivot;
+    /*printf("Pivot index for %d is  %d\n",pivot,(int) pivot_index);
+    printf("[");
+    for(int i=0;i<size;i++)
+    {
+        printf("%d ",aux[i]);
+    }
+    printf("]\n");*/
     pqsort_args_t args[2];
-    args[0].inp = arr;
+    args[0].inp = aux;
     args[0].first = 0;
     args[0].last = pivot_index-1;
-    args[0].aux = aux;
-    args[0].bin = bin;
+    args[0].aux = arr;
     args[0].num_threads = num_threads/2;
     args[0].thread_offset = thread_offset;
     pthread_create(&tids[0],
                    &attr,
                    _pqsort,
                    (void *)&args[0]);
-    args[1].inp = arr;
+    args[1].inp = aux;
     args[1].first = pivot_index+1;
     args[1].last = size-1;
-    args[1].aux = aux;
-    args[1].bin = bin;
+    args[1].aux = arr;
     args[1].num_threads = num_threads - (num_threads/2);
     args[1].thread_offset = thread_offset+(num_threads/2);
     pthread_create(&tids[1],
@@ -180,6 +190,7 @@ void *_pqsort(void *pqdata)
     for(int i=0;i<2;i++){
         pthread_join(tids[i],NULL);
     }
+    for(int i=0;i<10000;i++);
     return NULL;
 }
 void *pthread_pqsort(void *tdata)
@@ -191,85 +202,127 @@ void *pthread_pqsort(void *tdata)
     int *inp = myargs->inp;
     int offset = myargs->offset;
     int *arr = inp + offset;
-    int *aux = (myargs->aux)+offset;
-    int *bin = (myargs->bin)+offset;
+    int *aux = myargs->aux;
+    /* Here, inp and aux correspond to each other
+       arr is just my part of input array.*/
     int size = myargs->size;
     int pivot = myargs->pivot;
     int *pivot_replacement_ptr = myargs->pivot_replacement_ptr;
-    //int aux[size],bin[size];
-    //int *aux = (int *)malloc(size*sizeof(int));
-    //int *bin = (int *)malloc(size*sizeof(int));
-    memcpy(aux,arr,size*sizeof(int));
-    for(int i=0;i<size;i++){
-        if(aux[i] <= pivot){
-            bin[i] = 1;
+    int num_le = seq_pivot_rearrange(arr,size,pivot);
+    /*for(int i=0;i<size;i++){
+        if(i<num_le && arr[i]>pivot){
+            printf("Thread(%d): partition wrong!\n",my_id);
+            break;
         }
-        else
-            bin[i] = 0;
+        else if(i>=num_le && arr[i]<=pivot){
+            printf("Thread(%d): partition wrong!\n",my_id);
+            break;
+        }
+    }*/
+    int num_g = size - num_le;
+    int pivot_index = -1;
+    if(num_le >0 && arr[num_le-1] == pivot){
+        pivot_index = num_le-1;
     }
-    /* START PREFIX SUM on bin*/
-    //printf("Thread no %d : size is %d\n",my_id,size);
-    /* d holds the dimensions of imaginary hypercube */
+    /* START PREFIX SUM */
     int d = ceil(log(num_threads)/log(2));
     //printf("num_threads is %d and d is %d\n",num_threads,d);
-    /* Get address of my inbox */
-    int *my_mail = mail_box+(total_num_threads*my_id);
-    /* Calculate sequential prefix_sum */
-    seq_prefix_sum(bin,size);
-    /* Last element in prefix_sum is sum of all elements */
-    int sum = bin[size-1];
-    /* msg is the running sum */
-    int msg = sum;
-    int partner = -1, mask = 0, number = 0, incr = 0;
+    int *my_mail1 = mail_box1+(total_num_threads*my_id);
+    int *my_mail2 = mail_box2+(total_num_threads*my_id);
+    int msg1 = num_le;
+    int msg2 = num_g;
+    int partner = -1, mask = 0, number1 = 0, number2 =0, incr1 = 0, incr2 = 0;
     for(int i=0;i<=d-1;i++){
         mask = (mask==0)?1:mask<<1;
         partner = my_id XOR mask;
         /* Send msg to partner */
         pthread_mutex_lock(&lock_array[array_index(partner,my_id)]);
-        //printf("Thread(%d): sending %d to %d\n",my_id,msg,partner);
-        mail_box[array_index(partner,my_id)] = msg;
+        //printf("Thread(%d): sending %d and %d to %d\n",my_id,msg1,msg2,partner);
+        mail_box1[array_index(partner,my_id)] = msg1;
+        mail_box2[array_index(partner,my_id)] = msg2;
         pthread_cond_signal(&cond_array[array_index(partner,my_id)]);
         pthread_mutex_unlock(&lock_array[array_index(partner,my_id)]);
         /* Recv number from partner */
         pthread_mutex_lock(&lock_array[array_index(my_id,partner)]);
-        while(my_mail[partner] == -1){
+        while(my_mail2[partner] == -1){
             //printf("Thread(%d): waiting for value from %d\n",my_id,partner);
             pthread_cond_wait(&cond_array[array_index(my_id,partner)],
                               &lock_array[array_index(my_id,partner)]);
         }
-        number = my_mail[partner];
+        number1 = my_mail1[partner];
+        number2 = my_mail2[partner];
         pthread_mutex_unlock(&lock_array[array_index(my_id,partner)]);
-        //printf("Thread(%d): Recieved %d from %d\n",my_id,number,partner);
-        msg+=number;
+        //printf("Thread(%d): Recieved %d and %d from %d\n",my_id,number1,number2,partner);
+        msg1+=number1;
+        msg2+=number2;
         /* If partner deals with lesser indexes in array, add its
            results to your elements
         */
-        if(partner < my_id)
-            incr+=number;
+        if(partner < my_id){
+            incr1+=number1;
+            incr2+=number2;
+        }
     }
-    add_to_all(bin,incr,size);
     /* Reset mailbox for reuse at next level */
+    /* TODO reset only ones that are actually used*/
     for(int i=0;i<total_num_threads;i++){
-        my_mail[i] = -1;
+        my_mail1[i] = -1;
+        my_mail2[i] = -1;
     }
-    /* END PREFIX SUM on bin*/
-    int cur_index,new_index,returnable = 0;
-    for(int i=0;i<size;i++){
-        if(aux[i] <  pivot){
-            new_index = bin[i]-1;
+    /* END PREFIX SUM */
+    int my_lower_offset = incr1;
+    int my_higher_offset = msg1+incr2;
+    //printf("Thread(%d): lower offset %d Higher offset %d msg1=%d msg2 = %d\n",my_id,my_lower_offset,my_higher_offset,msg1,msg2);
+    if(num_le > 0)
+        memcpy(aux+my_lower_offset,arr,num_le*sizeof(int));
+    if(num_g > 0)
+        memcpy(aux+my_higher_offset,(arr+num_le),num_g*sizeof(int));
+    /* Assuming imaginary barrier here, aux will have all number less than
+       or equal to pivot from 0 to msg-1 and all numbers greater than
+       pivot from msg to total_num_elems-1.
+     */
+     if(pivot_index >= 0){
+        *pivot_replacement_ptr = incr1+pivot_index;
+     }
+    
+    return (void *) (msg1 - 1);
+}
+int seq_pivot_rearrange(int *arr,int size,int pivot)
+{
+    int pivot_index = -1,i=0,j=size-1,tmp;
+    while(i<j){
+        while(arr[i]<pivot && i<size)
+            i++;
+        if(i<size && arr[i]==pivot){
+            pivot_index = i;
+            i++;
+            continue;
         }
-        else if(aux[i] == pivot){
-            new_index = bin[i]-1;
-            *pivot_replacement_ptr = bin[i]-1;
+        while(arr[j]>pivot && j>0)
+            j--;
+        if(i<j){
+            tmp = arr[i];
+            arr[i] = arr[j];
+            arr[j] = tmp;
+            i++;j--;
         }
-        else {
-            cur_index = offset+i;
-            /* Fix: msg could be wrong if num_threads not power of 2 */
-            new_index = msg+(cur_index - bin[i]);
-        }
-        inp[new_index] = aux[i];
     }
-    return (void *) (msg - 1);
+    if(i==j){
+        if(arr[i]<pivot)
+            i++;
+        else if(arr[i]==pivot){
+            pivot_index = -1;
+            i++;
+        }
+    }
+    /*POSTCONDITION: arr[i-1] holds last number <= pivot*/
+    if(pivot_index!=-1){
+        arr[pivot_index] = arr[i-1];
+        arr[i-1] = pivot;
+        //printf("Pivot %d will be location %d\n",pivot,i-1);
+    }
+    /* There are i elements less than or equal to pivot */
+    return i;
 }
 void seq_prefix_sum(int *arr,int num_elems){
     for(int i=1;i<num_elems;i++){
