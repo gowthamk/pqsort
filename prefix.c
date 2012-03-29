@@ -5,6 +5,7 @@
 #include<pthread.h>
 #define NUM_THREADS 4
 #define XOR ^
+#define array_index(row,col) (row*total_num_threads+col)
 int *mail_box;
 int total_num_threads;
 pthread_mutex_t *lock_array;
@@ -14,6 +15,8 @@ typedef struct {
     int thread_no;
     int num_threads;
     int *inp;
+    int *aux;
+    int *bin;
     int offset;
     int size;
     int pivot;
@@ -23,6 +26,8 @@ typedef struct {
     int  *inp;
     int first;
     int last;
+    int *aux;
+    int *bin;
     int num_threads;
     int thread_offset;
 } pqsort_args_t;
@@ -30,13 +35,6 @@ void *_pqsort(void *);
 void *pthread_pqsort(void *);
 void seq_prefix_sum(int *,int);
 void add_to_all(int *arr, int incr, int size);
-/*
-    todo: define this as macro
-*/
-int array_index(int row,int col)
-{
-    return row*total_num_threads+col;
-}
 int compare (const void * a, const void * b)
 {
   return ( *(int*)a - *(int*)b );
@@ -46,7 +44,7 @@ int get_pivot(int *arr,int size)
     if(size<10)
         return arr[size/2];
     int num_samples;
-    num_samples = (size>=1000)?111:(size>=100?11:3);
+    num_samples = (size>=1000)?111:(size>=100?21:6);
     int offset = (size/2)>num_samples?(size/2):0;
     int samples[num_samples];
     memcpy(samples,arr+offset,num_samples*sizeof(int));
@@ -62,6 +60,9 @@ int *pqsort(int *inp,int size,int num_threads)
     mail_box = (int *) malloc(num_threads*num_threads*sizeof(int));
     lock_array = (pthread_mutex_t *) malloc(num_threads*num_threads*sizeof(pthread_mutex_t));
     cond_array = (pthread_cond_t *) malloc(num_threads*num_threads*sizeof(pthread_cond_t));
+    /* auxilary and binary array for pivot rearrangement and prefix sum */
+    int *aux = (int *) malloc(size*sizeof(int));
+    int *bin = (int *) malloc(size*sizeof(int));
     for(int i=0;i<num_threads;i++){
         for(int j=0;j<num_threads;j++){
             /* Initializing shared memory for msg exchange */
@@ -77,6 +78,8 @@ int *pqsort(int *inp,int size,int num_threads)
     args.inp = inp;
     args.first = 0;
     args.last = size-1;
+    args.aux = aux;
+    args.bin = bin;
     args.num_threads = num_threads;
     args.thread_offset = 0;
     _pqsort((void *)&args);
@@ -88,15 +91,17 @@ void *_pqsort(void *pqdata)
     int *inp = my_args->inp;
     int first = my_args->first;
     int last = my_args->last;
+    int *aux = my_args->aux;
+    int *bin = my_args->bin;
     int num_threads = my_args->num_threads;
     int thread_offset = my_args->thread_offset;
     if(last<=first){
         return NULL;
     }
-    int *arr = inp+first; /*(int *)malloc(size * sizeof(int));
-    memcpy(arr,inp,size*sizeof(int));
-    printf("\n");*/
+    int *arr = inp+first; 
     int size = last-first+1;
+    aux+=first;
+    bin+=first;
     /*printf("[");
     for(int i=0;i<size;i++)
     {
@@ -124,6 +129,8 @@ void *_pqsort(void *pqdata)
         thread_args[i].thread_no = i + thread_offset;
         thread_args[i].num_threads = num_threads;
         thread_args[i].inp = arr;
+        thread_args[i].aux = aux;
+        thread_args[i].bin = bin;
         thread_args[i].offset = i*fair_share;
         thread_args[i].size = (i==num_threads-1)?max_share:fair_share;
         thread_args[i].pivot = pivot;
@@ -151,6 +158,8 @@ void *_pqsort(void *pqdata)
     args[0].inp = arr;
     args[0].first = 0;
     args[0].last = pivot_index-1;
+    args[0].aux = aux;
+    args[0].bin = bin;
     args[0].num_threads = num_threads/2;
     args[0].thread_offset = thread_offset;
     pthread_create(&tids[0],
@@ -160,6 +169,8 @@ void *_pqsort(void *pqdata)
     args[1].inp = arr;
     args[1].first = pivot_index+1;
     args[1].last = size-1;
+    args[1].aux = aux;
+    args[1].bin = bin;
     args[1].num_threads = num_threads - (num_threads/2);
     args[1].thread_offset = thread_offset+(num_threads/2);
     pthread_create(&tids[1],
@@ -180,12 +191,14 @@ void *pthread_pqsort(void *tdata)
     int *inp = myargs->inp;
     int offset = myargs->offset;
     int *arr = inp + offset;
+    int *aux = (myargs->aux)+offset;
+    int *bin = (myargs->bin)+offset;
     int size = myargs->size;
     int pivot = myargs->pivot;
     int *pivot_replacement_ptr = myargs->pivot_replacement_ptr;
     //int aux[size],bin[size];
-    int *aux = (int *)malloc(size*sizeof(int));
-    int *bin = (int *)malloc(size*sizeof(int));
+    //int *aux = (int *)malloc(size*sizeof(int));
+    //int *bin = (int *)malloc(size*sizeof(int));
     memcpy(aux,arr,size*sizeof(int));
     for(int i=0;i<size;i++){
         if(aux[i] <= pivot){
