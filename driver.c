@@ -50,7 +50,7 @@ int main(int argc, char **argv)
     gettimeofday(&tv, NULL);
     double t2=tv.tv_sec+(tv.tv_usec/1000000.0);
     printf("Parallel execution time with %d threads on %d elements is %.6lfs\n",num_threads,num_elements,t2-t1);
-    /*printf("\nOutput: ");
+    /*printf("\nOutput: \n");
     for(i=0;i<num_elements;i++){
         printf("%d ",output[i]);
     }

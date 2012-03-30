@@ -9,12 +9,12 @@
 #define array_index(row,col) (row*total_num_threads+col)
 int *mail_box1;
 int *mail_box2;
-int *input;
 int total_num_threads;
 int total_num_elements;
 pthread_mutex_t *lock_array;
 pthread_cond_t *cond_array;
 pthread_t *threads;
+pthread_attr_t attr;
 typedef struct {
     int thread_no;
     int num_threads;
@@ -25,6 +25,7 @@ typedef struct {
     int pivot;
     int *pivot_replacement_ptr;
 } prefix_args_t;
+prefix_args_t *thread_args;
 typedef struct {
     int  *inp;
     int first;
@@ -48,17 +49,16 @@ int get_pivot(int *arr,int size)
         return arr[size/2];
     int num_samples;
     num_samples = (size>=1000)?111:(size>=100?21:6);
-    int offset = (size/2)>num_samples?(size/2):0;
-    int samples[num_samples];
-    memcpy(samples,arr+offset,num_samples*sizeof(int));
-    qsort(samples,num_samples,sizeof(int),compare);
-    return samples[num_samples/2];
+    int offset = (size/2)>num_samples?((size/2)-(num_samples/2)):0;
+    //int samples[num_samples];
+    //memcpy(samples,arr+offset,num_samples*sizeof(int));
+    qsort(arr+offset,num_samples,sizeof(int),compare);
+    return arr[offset+num_samples/2];
 }
 int *pqsort(int *inp,int size,int num_threads)
 {
     total_num_threads = num_threads;
     total_num_elements = size;
-    input = inp;
     /* Initialize all shared datastructures that
        stay alive througout the execution
      */
@@ -66,6 +66,9 @@ int *pqsort(int *inp,int size,int num_threads)
     mail_box2 = (int *) malloc(num_threads*num_threads*sizeof(int));
     lock_array = (pthread_mutex_t *) malloc(num_threads*num_threads*sizeof(pthread_mutex_t));
     cond_array = (pthread_cond_t *) malloc(num_threads*num_threads*sizeof(pthread_cond_t));
+    thread_args = (prefix_args_t *) malloc(num_threads * sizeof(prefix_args_t));
+    pthread_attr_init(&attr);
+    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_JOINABLE);
     /* auxilary array for pivot rearrangement and prefix sum */
     int *aux = (int *) malloc(size*sizeof(int));
     for(int i=0;i<num_threads;i++){
@@ -120,30 +123,29 @@ void *_pqsort(void *pqdata)
     int pivot_replacement_index;
    // printf("Pivot is %d\n",pivot);
     pthread_t tids[num_threads];
-    pthread_attr_t attr;
-    pthread_attr_init(&attr);
-    pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_JOINABLE);
 
     int fair_share = size/num_threads;
     int max_share = fair_share+(size%num_threads);
-    prefix_args_t *thread_args = (prefix_args_t *) malloc(num_threads * sizeof(prefix_args_t));
+    int global_tid;
     for(int i=0;i<num_threads;i++){
         /* Initialize Arguments for N threads */
-        thread_args[i].thread_no = i + thread_offset;
-        thread_args[i].num_threads = num_threads;
-        thread_args[i].inp = arr;
-        thread_args[i].aux = aux;
-        thread_args[i].offset = i*fair_share;
-        thread_args[i].size = (i==num_threads-1)?max_share:fair_share;
-        thread_args[i].pivot = pivot;
-        thread_args[i].pivot_replacement_ptr = &pivot_replacement_index;
+        global_tid = i + thread_offset;
+        thread_args[global_tid].thread_no = global_tid;
+        thread_args[global_tid].num_threads = num_threads;
+        thread_args[global_tid].inp = arr;
+        thread_args[global_tid].aux = aux;
+        thread_args[global_tid].offset = i*fair_share;
+        thread_args[global_tid].size = (i==num_threads-1)?max_share:fair_share;
+        thread_args[global_tid].pivot = pivot;
+        thread_args[global_tid].pivot_replacement_ptr = &pivot_replacement_index;
     }
     /* Launch N threads */
     for(int i=0;i<num_threads;i++){
+        global_tid = i + thread_offset;
         pthread_create(&tids[i],
                        &attr,
                        pthread_pqsort,
-                       (void *)&thread_args[i]);
+                       (void *)&thread_args[global_tid]);
     }
     /* Wait for N threads to join */
     int pivot_index;
@@ -159,13 +161,6 @@ void *_pqsort(void *pqdata)
     }
     /* arr is the aux of next level */
     arr[pivot_index] = pivot;
-    /*printf("Pivot index for %d is  %d\n",pivot,(int) pivot_index);
-    printf("[");
-    for(int i=0;i<size;i++)
-    {
-        printf("%d ",aux[i]);
-    }
-    printf("]\n");*/
     pqsort_args_t args[2];
     args[0].inp = aux;
     args[0].first = 0;
@@ -190,7 +185,6 @@ void *_pqsort(void *pqdata)
     for(int i=0;i<2;i++){
         pthread_join(tids[i],NULL);
     }
-    for(int i=0;i<10000;i++);
     return NULL;
 }
 void *pthread_pqsort(void *tdata)
@@ -209,16 +203,6 @@ void *pthread_pqsort(void *tdata)
     int pivot = myargs->pivot;
     int *pivot_replacement_ptr = myargs->pivot_replacement_ptr;
     int num_le = seq_pivot_rearrange(arr,size,pivot);
-    /*for(int i=0;i<size;i++){
-        if(i<num_le && arr[i]>pivot){
-            printf("Thread(%d): partition wrong!\n",my_id);
-            break;
-        }
-        else if(i>=num_le && arr[i]<=pivot){
-            printf("Thread(%d): partition wrong!\n",my_id);
-            break;
-        }
-    }*/
     int num_g = size - num_le;
     int pivot_index = -1;
     if(num_le >0 && arr[num_le-1] == pivot){
@@ -284,7 +268,7 @@ void *pthread_pqsort(void *tdata)
      if(pivot_index >= 0){
         *pivot_replacement_ptr = incr1+pivot_index;
      }
-    
+
     return (void *) (msg1 - 1);
 }
 int seq_pivot_rearrange(int *arr,int size,int pivot)
